@@ -40,7 +40,7 @@ tailscale status
 # Configure reverse proxy: expose openclaw service via Tailscale serve
 # Accessible at https://<hostname>.tail3d8d9e.ts.net
 echo "Configuring reverse proxy to openclaw-pernal.zeabur.internal:18789 ..."
-tailscale serve --bg / http://openclaw-pernal.zeabur.internal:18789
+tailscale serve --bg --set-path=/ http://openclaw-pernal.zeabur.internal:18789
 
 echo "Current Tailscale Serve status:"
 tailscale serve status
