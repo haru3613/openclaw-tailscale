@@ -1,37 +1,53 @@
-FROM ghcr.io/openclaw/openclaw:2026.2.9  
-# 切換到 root 用戶以安裝 Tailscale  
-USER root  
-# 安裝 Tailscale  
-RUN apt-get update && apt-get install -y tailscale && rm -rf /var/lib/apt/lists/*  
-# 切換回原始用戶  
-USER node  
-# 創建啟動腳本  
-RUN mkdir -p /app/scripts  
-RUN cat > /app/scripts/entrypoint.sh << 'EOF'  
-#!/bin/bash  
-set -e  
-# 啟動 Tailscale daemon  
-echo "Starting Tailscale daemon..."  
-tailscaled --tun=userspace-networking &  
-TAILSCALED_PID=$!  
-# 等待 tailscaled 啟動  
-sleep 2  
-# 使用環境變數連接到 Tailscale  
-if [ -n "$TS_AUTHKEY" ]; then  
-    echo "Connecting to Tailscale with auth key..."  
-    tailscale up \  
-        --authkey="$TS_AUTHKEY" \  
-        --hostname="${TS_HOSTNAME:-openclaw}" \  
-        --accept-dns=false \  
-        --accept-routes=false  
-    echo "Tailscale connected successfully"  
-else  
-    echo "Warning: TS_AUTHKEY not set, Tailscale will not auto-connect"  
-fi  
-# 啟動 OpenClaw  
-echo "Starting OpenClaw..."  
-exec node /home/node/bin/openclaw.js  
-EOF  
-RUN chmod +x /app/scripts/entrypoint.sh  
-# 設置新的入口點  
-ENTRYPOINT ["/app/scripts/entrypoint.sh"]  
+FROM tailscale/tailscale:latest
+
+RUN mkdir -p /app /var/lib/tailscale /var/run/tailscale
+
+RUN cat > /app/entrypoint.sh << 'EOF'
+#!/bin/sh
+set -e
+
+if [ -z "$TS_AUTHKEY" ]; then
+    echo "Error: TS_AUTHKEY is required"
+    exit 1
+fi
+
+echo "Starting tailscaled (userspace networking)..."
+tailscaled \
+    --tun=userspace-networking \
+    --statedir=/var/lib/tailscale \
+    --socket=/var/run/tailscale/tailscaled.sock &
+TAILSCALED_PID=$!
+
+# Wait for tailscaled socket to be ready
+echo "Waiting for tailscaled to be ready..."
+for i in $(seq 1 15); do
+    if tailscale status >/dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
+
+echo "Connecting to Tailscale network..."
+tailscale up \
+    --authkey="$TS_AUTHKEY" \
+    --hostname="${TS_HOSTNAME:-openclaw-proxy}" \
+    --accept-dns=false \
+    --accept-routes=false
+
+echo "Tailscale connected:"
+tailscale status
+
+# Configure reverse proxy: expose openclaw service via Tailscale serve
+# Accessible at https://<hostname>.tail3d8d9e.ts.net
+echo "Configuring reverse proxy to openclaw-pernal.zeabur.internal:18789 ..."
+tailscale serve --bg http://openclaw-pernal.zeabur.internal:18789
+
+echo "Reverse proxy is running."
+echo "Service accessible at: https://${TS_HOSTNAME:-openclaw-proxy}.tail3d8d9e.ts.net"
+
+wait $TAILSCALED_PID
+EOF
+
+RUN chmod +x /app/entrypoint.sh
+
+ENTRYPOINT ["/app/entrypoint.sh"]
